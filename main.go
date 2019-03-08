@@ -1,73 +1,71 @@
 package main
 
 import (
-	"github.com/Shopify/sarama"
-	"github.com/jmoiron/sqlx"
-	_ "github.com/go-sql-driver/mysql"
-	"github.com/joho/godotenv"
-	//"database/sql"
-	"log"
-	"fmt"
 	"encoding/xml"
-	"strings"
-	"os"
+	"fmt"
+	"github.com/Shopify/sarama"
+	_ "github.com/go-sql-driver/mysql"
+	"github.com/jmoiron/sqlx"
+	"github.com/joho/godotenv"
+	"log"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 )
 
 type OpenTarget struct {
 	XMLName xml.Name `xml:"opentarget"`
-	Txn Txn `xml:"txn"`
-	Table Table `xml:"tbl"`
+	Txn     Txn      `xml:"txn"`
+	Table   Table    `xml:"tbl"`
 }
 type Txn struct {
-	XMLName xml.Name `xml:"txn"`
-	Id int `xml:"id,attr"`
-	MsgIdx int `xml:"msgIdx,attr"`
+	XMLName    xml.Name   `xml:"txn"`
+	Id         int        `xml:"id,attr"`
+	MsgIdx     int        `xml:"msgIdx,attr"`
 	CommitTime customTime `xml:"commitTime,attr"`
 }
-type Table struct{
+type Table struct {
 	XMLName xml.Name `xml:"tbl"`
-	Name string `xml:"name,attr"`
-	Command Command `xml:"cmd"`
+	Name    string   `xml:"name,attr"`
+	Command Command  `xml:"cmd"`
 }
 
-type Command struct{
-	XMLName xml.Name `xml:"cmd"`
-	Operation string `xml:"ops,attr"`
-	Row Row `xml:"row"`
+type Command struct {
+	XMLName   xml.Name `xml:"cmd"`
+	Operation string   `xml:"ops,attr"`
+	Row       Row      `xml:"row"`
 }
-type Row struct{
+type Row struct {
 	XMLName xml.Name `xml:"row"`
-	Id string `xml:"id,attr"`
+	Id      string   `xml:"id,attr"`
 	Columns []Column `xml:"col"`
-	Lookup Lookup `xml:"lkup"`
+	Lookup  Lookup   `xml:"lkup"`
 }
-type Column struct{
+type Column struct {
 	XMLName xml.Name `xml:"col"`
-	Name string `xml:"name,attr"`
-	Value string `xml:",chardata"`
+	Name    string   `xml:"name,attr"`
+	Value   string   `xml:",chardata"`
 }
 
-type Lookup struct{
+type Lookup struct {
 	XMLName xml.Name `xml:"lkup"`
 	Columns []Column `xml:"col"`
 }
 
-
 type ChangeDataCapture struct {
-	db *sqlx.DB
+	db      *sqlx.DB
 	brokers []string
 }
 
 type KafkaLog struct {
-	Id int `db:"go_kafka_log_id"`
-	TxnId int `db:"txn_id"`
-	MsgId int `db:"msg_id"`
+	Id         int    `db:"go_kafka_log_id"`
+	TxnId      int    `db:"txn_id"`
+	MsgId      int    `db:"msg_id"`
 	SchemaName string `db:"schema_name"`
-	TableName string `db:"table_name"`
-	Operation string
-	Payload string
+	TableName  string `db:"table_name"`
+	Operation  string
+	Payload    string
 	CommitTime time.Time `db:"commit_time"`
 }
 
@@ -89,10 +87,7 @@ func (c *customTime) UnmarshalXMLAttr(attr xml.Attr) error {
 	return nil
 }
 
-//var brokers = []string{"cl-rdv-kafka1.qualifacts.com:6667","cl-rdv-kafka2.qualifacts.com:6667","cl-rdv-kafka3.qualifacts.com:6667"}
-//var topic = "team3c"
-
-func main(){
+func main() {
 	err := godotenv.Load()
 	if err != nil {
 		log.Fatal("Error loading .env file")
@@ -101,7 +96,6 @@ func main(){
 	var topic = os.Getenv("TOPIC")
 	var databaseUrl = os.Getenv("DATABASE_URL")
 	var httpAddress = os.Getenv("HTTP_ADDRESS")
-
 
 	log.Printf("Reading topic %v from %v\n database: %v  httpAddress [%v] \n", topic, brokers, databaseUrl, httpAddress)
 
@@ -127,7 +121,7 @@ func main(){
 
 }
 
-func (cdc *ChangeDataCapture) MustNewConsumer() (sarama.Consumer) {
+func (cdc *ChangeDataCapture) MustNewConsumer() sarama.Consumer {
 	config := sarama.NewConfig()
 	consumer, err := sarama.NewConsumer(cdc.brokers, config)
 	if err != nil {
@@ -136,7 +130,6 @@ func (cdc *ChangeDataCapture) MustNewConsumer() (sarama.Consumer) {
 	}
 	return consumer
 }
-
 
 func (cdc *ChangeDataCapture) subscribe(topic string, consumer sarama.Consumer) {
 	partitionList, err := consumer.Partitions(topic) //get all partitions on the given topic
@@ -161,29 +154,31 @@ func (cdc *ChangeDataCapture) messageReceived(message *sarama.ConsumerMessage) {
 	cdc.processMessage(message.Value)
 }
 
-func (cdc *ChangeDataCapture) processMessage(messageValue []byte){
+func (cdc *ChangeDataCapture) processMessage(messageValue []byte) {
 	var openTarget OpenTarget
-	xml.Unmarshal(messageValue, &openTarget)
+	err := xml.Unmarshal(messageValue, &openTarget)
 
-	if openTarget.Table.Name != "" {
-		log.Printf("%v -> %v",openTarget.Table.Command.Operation, openTarget.Table.Name)
-		tasch := strings.Split(openTarget.Table.Name, ".")
+	if err == nil {
+		if openTarget.Table.Name != "" {
+			log.Printf("%v -> %v", openTarget.Table.Command.Operation, openTarget.Table.Name)
+			tableSchema := strings.Split(openTarget.Table.Name, ".")
 
-		var kafkaLog = KafkaLog{
-			TxnId:openTarget.Txn.Id,
-			MsgId:openTarget.Txn.MsgIdx,
-			SchemaName:tasch[0],
-			TableName:tasch[1],
-			Operation:openTarget.Table.Command.Operation,
-			Payload:string(messageValue),
-			CommitTime:openTarget.Txn.CommitTime.Time}
-		query:= "insert into go_kafka_log (txn_id, msg_id, schema_name, table_name, operation, payload,commit_time,created_date) " +
-			"values(:txn_id, :msg_id, :schema_name, :table_name, :operation, :payload, :commit_time,sysdate())"
-		_, error := cdc.db.NamedExec(query, &kafkaLog)
-		if error !=nil{
-			fmt.Println("Error persisting ", error)
+			var kafkaLog = KafkaLog{
+				TxnId:      openTarget.Txn.Id,
+				MsgId:      openTarget.Txn.MsgIdx,
+				SchemaName: tableSchema[0],
+				TableName:  tableSchema[1],
+				Operation:  openTarget.Table.Command.Operation,
+				Payload:    string(messageValue),
+				CommitTime: openTarget.Txn.CommitTime.Time}
+			query := "insert into go_kafka_log (txn_id, msg_id, schema_name, table_name, operation, payload,commit_time,created_date) " +
+				"values(:txn_id, :msg_id, :schema_name, :table_name, :operation, :payload, :commit_time,sysdate())"
+			_, error := cdc.db.NamedExec(query, &kafkaLog)
+			if error != nil {
+				fmt.Println("Error persisting ", error)
+			}
+			//log.Printf("%v %v",kafkaLog, query)
 		}
-		//log.Printf("%v %v",kafkaLog, query)
 	}
 
 }
