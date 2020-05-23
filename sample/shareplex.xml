@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?opentarget version="1.1"?>
+<opentarget>
+    <txn id="2218318728" msgIdx="1" msgTot="1" commitTime="2014-10-10T13:19:12" userId="85" oracleTxnId="1.17.970754" />
+    <tbl name="MFG.PRODUCT">
+        <cmd ops="upd">
+            <row id="AAAmDbAAEAAApRrAAA">
+                <col name="PRICE">3599</col>
+                <lkup>
+                    <col name="PRODUCT_ID">230117</col>
+                    <col name="PRICE">4099</col>
+                </lkup>
+            </row>
+        </cmd>
+    </tbl>
+</opentarget>
